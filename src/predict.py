@@ -6,95 +6,86 @@ from catboost import CatBoostClassifier
 from src.feature_extractor import extract_features, get_feature_names
 
 LGBM_PATH = 'models/lgbm_model.pkl'
-CAT_PATH = 'models/catboost_model.cbm'
+CAT_PATH  = 'models/catboost_model.cbm'
 
 _lgbm_model = None
-_cat_model = None
+_cat_model  = None
 
 
 def load_models():
     global _lgbm_model, _cat_model
     _lgbm_model = joblib.load(LGBM_PATH)
-    _cat_model = CatBoostClassifier()
+    _cat_model  = CatBoostClassifier()
     _cat_model.load_model(CAT_PATH)
     print("Models loaded successfully.")
 
 
 def compute_anti_phishing_score(url: str) -> float:
-    """
-    Returns anti-phishing score between 0 and 1.
-    0 = definitely phishing, 1 = definitely legitimate.
-    """
-    features = extract_features(url)
-    feature_cols = get_feature_names()
-    X = pd.DataFrame([features])[feature_cols].fillna(0)
-
-    lgbm_prob = _lgbm_model.predict_proba(X)[0][1]   # prob of phishing
-    cat_prob = _cat_model.predict_proba(X)[0][1]      # prob of phishing
-
+    features      = extract_features(url)
+    feature_cols  = get_feature_names()
+    X             = pd.DataFrame([features])[feature_cols].fillna(0)
+    lgbm_prob     = _lgbm_model.predict_proba(X)[0][1]
+    cat_prob      = _cat_model.predict_proba(X)[0][1]
     phishing_prob = (lgbm_prob + cat_prob) / 2
-
-    # Anti-phishing score: higher = safer
-    anti_phishing_score = 1 - phishing_prob
-    return round(float(anti_phishing_score), 4)
+    return round(float(1 - phishing_prob), 4)
 
 
 def predict_url(url: str) -> dict:
-    """Full prediction pipeline for a single URL."""
     url = url.strip()
-
-    # Add scheme if missing
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
 
     score = compute_anti_phishing_score(url)
 
-    # Risk levels
     if score >= 0.75:
-        label = "Legitimate"
-        risk = "Low Risk"
-        color = "green"
+        label, risk, color = "Legitimate",        "Low Risk",       "green"
     elif score >= 0.50:
-        label = "Likely Legitimate"
-        risk = "Medium Risk"
-        color = "orange"
+        label, risk, color = "Likely Legitimate",  "Medium Risk",   "orange"
     elif score >= 0.25:
-        label = "Likely Phishing"
-        risk = "High Risk"
-        color = "red"
+        label, risk, color = "Likely Phishing",   "High Risk",      "red"
     else:
-        label = "Phishing"
-        risk = "Very High Risk"
-        color = "darkred"
+        label, risk, color = "Phishing",           "Very High Risk", "darkred"
 
-    # Extract key features for explanation
-    features = extract_features(url)
+    features  = extract_features(url)
     red_flags = []
+
     if features.get('has_ip'):
         red_flags.append("Uses IP address instead of domain")
     if features.get('has_at_symbol'):
         red_flags.append("Contains @ symbol")
     if features.get('is_shortener'):
-        red_flags.append("Uses URL shortener")
+        red_flags.append("Uses URL shortener service")
     if features.get('suspicious_tld'):
-        red_flags.append(f"Suspicious TLD")
-    if features.get('has_suspicious_keywords'):
-        red_flags.append("Contains phishing keywords")
-    if features.get('has_dash_in_domain'):
-        red_flags.append("Has dash in domain name")
-    if features.get('subdomain_count', 0) > 2:
-        red_flags.append("Too many subdomains")
+        red_flags.append("Suspicious free/disposable TLD (.tk .ml .xyz etc)")
+    if features.get('brand_spoofing'):
+        red_flags.append("Brand name spoofing detected")
+    if features.get('phishing_keyword'):
+        red_flags.append("Contains phishing-specific keywords")
+    if features.get('brand_hyphen_pattern'):
+        red_flags.append("Brand name with hyphen pattern in domain")
+    if features.get('long_hyphenated_sld'):
+        red_flags.append("Suspiciously long hyphenated domain name")
+    if features.get('subdomain_depth', 0) >= 2:
+        red_flags.append("Excessive subdomain depth")
     if not features.get('has_https'):
         red_flags.append("Not using HTTPS")
-    if features.get('url_length', 0) > 100:
-        red_flags.append("Unusually long URL")
+    if features.get('https_in_domain'):
+        red_flags.append("'https' keyword deceptively inside domain name")
+    if features.get('suspicious_path'):
+        red_flags.append("Multiple suspicious keywords in URL path")
+    if features.get('suspicious_query_params'):
+        red_flags.append("Suspicious redirect parameters in URL")
+    if features.get('has_double_slash'):
+        red_flags.append("Double slash redirect detected")
+    if features.get('numeric_domain'):
+        red_flags.append("Domain is a numeric IP address")
 
     return {
-        'url': url,
+        'url':                 url,
         'anti_phishing_score': score,
-        'prediction': label,
-        'risk_level': risk,
-        'color': color,
-        'confidence': round(max(score, 1 - score) * 100, 1),
-        'red_flags': red_flags
+        'prediction':          label,
+        'risk_level':          risk,
+        'color':               color,
+        'confidence':          round(max(score, 1 - score) * 100, 1),
+        'red_flags':           red_flags
     }
